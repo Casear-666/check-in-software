@@ -21,6 +21,27 @@
   margin: 0;
 }
 
+.header-btns {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.add-btn {
+  padding: 6px 16px;
+  border: none;
+  border-radius: 6px;
+  background: #5C6BC0;
+  color: #fff;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background 0.15s;
+}
+.add-btn:hover {
+  background: #4a56b0;
+}
+
 .undo-btn {
   padding: 6px 14px;
   border: 1px solid #d0d0d0;
@@ -72,6 +93,7 @@
 
 /* ── 事件样式覆盖 ── */
 .rbc-event {
+  position: relative;
   border-radius: 5px !important;
   border: none !important;
   font-size: 13px;
@@ -79,6 +101,29 @@
   line-height: 1.4;
   transition: background-color 0.15s ease, transform 0.12s ease, box-shadow 0.12s ease;
   cursor: grab;
+}
+/* 边缘拉伸提示 */
+.rbc-event::before,
+.rbc-event::after {
+  content: '';
+  position: absolute;
+  top: 2px; bottom: 2px;
+  width: 4px;
+  border-radius: 2px;
+  opacity: 0;
+  transition: opacity 0.2s;
+  pointer-events: none;
+  z-index: 2;
+}
+.rbc-event::before { left: 2px;  background: rgba(255,255,255,0.5); }
+.rbc-event::after  { right: 2px; background: rgba(255,255,255,0.5); }
+.rbc-event:hover::before,
+.rbc-event:hover::after { opacity: 0.6; }
+.rbc-event[data-edge="left"]::before,
+.rbc-event[data-edge="right"]::after {
+  opacity: 1;
+  width: 5px;
+  background: rgba(255,255,255,0.75);
 }
 .rbc-event:active {
   cursor: grabbing;
@@ -178,8 +223,54 @@
   color: #333;
 }
 .btn-confirm {
-  background: #F44336;
+  background: #4CAF50;
   color: #fff;
+}
+
+/* ── 添加任务弹窗 ── */
+.event-modal label {
+  display: block;
+  font-size: 12px;
+  color: #888;
+  margin: 12px 0 4px;
+  font-weight: 500;
+}
+.event-modal label:first-of-type {
+  margin-top: 0;
+}
+.modal-input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #d0d0d0;
+  border-radius: 6px;
+  font-size: 14px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s;
+  box-sizing: border-box;
+}
+.modal-input:focus {
+  border-color: #5C6BC0;
+}
+.modal-date-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.modal-num {
+  width: 60px !important;
+  text-align: center;
+}
+.modal-date-label {
+  font-size: 14px;
+  color: #666;
+  user-select: none;
+}
+
+/* 幽灵事件 */
+.rbc-event-ghost {
+  border-style: solid !important;
+  box-shadow: 0 0 8px rgba(92, 107, 192, 0.4);
 }
 
 @keyframes fadeIn {
