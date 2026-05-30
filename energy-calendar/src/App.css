@@ -1,0 +1,216 @@
+.app-container {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #f5f5f5;
+}
+
+/* ── 顶部栏 ── */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 20px;
+  background: #fff;
+  border-bottom: 1px solid #e0e0e0;
+  flex-shrink: 0;
+}
+.header h2 {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.undo-btn {
+  padding: 6px 14px;
+  border: 1px solid #d0d0d0;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.15s;
+}
+.undo-btn:hover:not(:disabled) {
+  background: #f0f0f0;
+}
+.undo-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ── 图例 ── */
+.legend {
+  display: flex;
+  gap: 20px;
+  padding: 8px 20px;
+  background: #fff;
+  border-bottom: 1px solid #eee;
+  flex-shrink: 0;
+  font-size: 13px;
+}
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  display: inline-block;
+}
+
+/* ── 日历容器 ── */
+.calendar-wrapper {
+  flex: 1;
+  min-height: 0;
+  padding: 0 4px 4px;
+}
+.calendar-wrapper .rbc-calendar {
+  height: 100%;
+}
+
+/* ── 事件样式覆盖 ── */
+.rbc-event {
+  border-radius: 5px !important;
+  border: none !important;
+  font-size: 13px;
+  padding: 4px 8px !important;
+  line-height: 1.4;
+  transition: background-color 0.15s ease, transform 0.12s ease, box-shadow 0.12s ease;
+  cursor: grab;
+}
+.rbc-event:active {
+  cursor: grabbing;
+}
+.rbc-event:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 3px 10px rgba(0,0,0,0.15);
+  z-index: 2;
+}
+
+.rbc-event-label {
+  font-size: 11px;
+  margin-bottom: 1px;
+}
+
+.rbc-event-content {
+  font-weight: 500;
+  font-size: 13px;
+}
+
+/* 月视图事件行高 */
+.rbc-month-view .rbc-event {
+  min-height: 22px;
+}
+
+/* 月视图跨天事件 */
+.rbc-row-segment .rbc-event {
+  padding: 5px 10px !important;
+  font-size: 13px;
+  transition: background-color 0.15s ease, transform 0.12s ease, box-shadow 0.12s ease;
+}
+.rbc-row-segment .rbc-event:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 3px 12px rgba(0,0,0,0.18);
+}
+
+/* 月视图行间距 */
+.rbc-month-row {
+  min-height: 120px;
+}
+.rbc-row-content {
+  padding: 2px 0;
+}
+.rbc-row-segment {
+  padding: 1px 0;
+}
+
+/* ── 确认弹窗 ── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  animation: fadeIn 0.15s ease;
+}
+
+.modal {
+  background: #fff;
+  border-radius: 12px;
+  padding: 28px 32px;
+  max-width: 380px;
+  width: 90%;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+  animation: scaleIn 0.2s ease;
+}
+.modal h3 {
+  margin: 0 0 10px;
+  font-size: 18px;
+}
+.modal p {
+  color: #666;
+  margin: 0 0 20px;
+  line-height: 1.5;
+}
+
+.modal-buttons {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+.modal-buttons button {
+  padding: 8px 18px;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  transition: opacity 0.15s;
+}
+.modal-buttons button:hover {
+  opacity: 0.85;
+}
+.btn-cancel {
+  background: #e0e0e0;
+  color: #333;
+}
+.btn-confirm {
+  background: #F44336;
+  color: #fff;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes scaleIn {
+  from { transform: scale(0.9); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+/* ── 移动端适配 ── */
+@media (max-width: 768px) {
+  .header {
+    padding: 8px 12px;
+  }
+  .header h2 {
+    font-size: 16px;
+  }
+  .legend {
+    padding: 6px 12px;
+    gap: 12px;
+    font-size: 12px;
+  }
+  .undo-btn {
+    font-size: 12px;
+    padding: 5px 10px;
+  }
+
+  /* 移动端长按拖拽 */
+  .rbc-event {
+    touch-action: none;
+  }
+}
