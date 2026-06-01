@@ -72,7 +72,18 @@
 .legend-item {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+}
+.legend-gradient {
+  width: 160px;
+  height: 12px;
+  border-radius: 3px;
+  display: inline-block;
+}
+.legend-label-left,
+.legend-label-right {
+  font-size: 12px;
+  color: #888;
 }
 .dot {
   width: 12px;
@@ -144,9 +155,40 @@
   font-size: 13px;
 }
 
-/* 月视图事件行高 */
+/* ── 事件微渐变质感 ── */
+.rbc-event:not(.rbc-event-ghost) {
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.2), 0 1px 3px rgba(0,0,0,0.1);
+}
+
+/* ── 今天高亮 ── */
+.rbc-today {
+  background-color: rgba(92, 107, 192, 0.06) !important;
+}
+
+/* 每个日期格刚好显示4个任务 */
+/* 动态行高 — 根据窗口自动均分 */
+.rbc-month-view {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.rbc-month-row {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.rbc-row-bg {
+  flex-shrink: 0;
+}
+.rbc-row-segment {
+  padding: 0;
+}
 .rbc-month-view .rbc-event {
-  min-height: 22px;
+  min-height: 20px;
+  font-size: 11px;
+  padding: 2px 6px !important;
 }
 
 /* 月视图跨天事件 */
@@ -160,16 +202,7 @@
   box-shadow: 0 3px 12px rgba(0,0,0,0.18);
 }
 
-/* 月视图行间距 */
-.rbc-month-row {
-  min-height: 120px;
-}
-.rbc-row-content {
-  padding: 2px 0;
-}
-.rbc-row-segment {
-  padding: 1px 0;
-}
+
 
 /* ── 确认弹窗 ── */
 .modal-overlay {
@@ -227,6 +260,15 @@
   color: #fff;
 }
 
+.btn-delete {
+  background: #e53935;
+  color: #fff;
+  margin-right: auto;
+}
+.btn-delete:hover {
+  background: #c62828;
+}
+
 /* ── 添加任务弹窗 ── */
 .event-modal label {
   display: block;
@@ -265,6 +307,12 @@
   font-size: 14px;
   color: #666;
   user-select: none;
+}
+
+.modal-textarea {
+  resize: vertical;
+  min-height: 40px;
+  font-family: inherit;
 }
 
 /* 幽灵事件 */

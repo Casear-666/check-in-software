@@ -1,22 +1,17 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { Calendar, momentLocalizer } from 'react-big-calendar';
 import { DndProvider, useDrag, useDragLayer, useDrop } from 'react-dnd';
 import { HTML5Backend, getEmptyImage } from 'react-dnd-html5-backend';
 import moment from 'moment';
 import 'react-big-calendar/lib/css/react-big-calendar.css';
 import './App.css';
+import { colorForOverlap, eventGradient } from './colors';
+import { fetchTasks, createTask, updateTask, deleteTask, debouncedUpdateTime } from './api';
 
 const localizer = momentLocalizer(moment);
 const EVENT_TYPE = 'CALENDAR_EVENT';
 
-// ── 颜色 ──
-const COLORS = {
-  1: { bg: '#4CAF50', text: '#fff' },
-  2: { bg: '#FFC107', text: '#000' },
-  3: { bg: '#F44336', text: '#fff' },
-};
-
-// ── 重叠计算 ──
+// ── 重叠计算（扫线算法 O(n log n)）──
 function calcOverlap(events, targetStart, targetEnd, excludeId) {
   const t0 = new Date(targetStart).getTime();
   const t1 = new Date(targetEnd).getTime();
@@ -95,12 +90,13 @@ function DragPreview() {
   if (!isDragging || !offset || !item?.event) return null;
   if (item.mode !== 'move') return null;
 
+  const c = colorForOverlap(item.level || 1);
+
   return (
     <div style={{ position: 'fixed', left: 0, top: 0, pointerEvents: 'none', zIndex: 9999,
       transform: `translate(${offset.x - 70}px, ${offset.y - 14}px)` }}>
       <div style={{
-        background: COLORS[Math.min(item.level || 1, 3)].bg,
-        color: '#fff', padding: '6px 16px', borderRadius: '6px',
+        backgroundColor: c.bg, color: c.text, padding: '6px 16px', borderRadius: '6px',
         fontSize: '13px', fontWeight: 600,
         boxShadow: '0 10px 40px rgba(0,0,0,0.35)', opacity: 0.95, whiteSpace: 'nowrap',
       }}>{item.event.title}</div>
@@ -135,7 +131,7 @@ function GhostMonitor({ onGhost }) {
 }
 
 // ═══ 事件包裹层（边缘检测 + 右键删除）═══
-function DragEventWrapper({ event, children, onDelete }) {
+function DragEventWrapper({ event, children, onDelete, overlapLevel }) {
   const modeRef = useRef('move');
   const [edge, setEdge] = useState(null);
 
@@ -149,7 +145,7 @@ function DragEventWrapper({ event, children, onDelete }) {
   }, []);
 
   const handleMouseDown = useCallback((e) => {
-    if (e.button === 2) return; // 右键不处理拖拽
+    if (e.button === 2) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const zone = Math.min(rect.width * 0.2, 18);
@@ -168,9 +164,9 @@ function DragEventWrapper({ event, children, onDelete }) {
 
   const [{ isDragging }, drag, preview] = useDrag(() => ({
     type: EVENT_TYPE,
-    item: () => ({ event, mode: modeRef.current, level: 1 }),
+    item: () => ({ event, mode: modeRef.current, level: overlapLevel || 1 }),
     collect: m => ({ isDragging: m.isDragging() }),
-  }), [event]);
+  }), [event, overlapLevel]);
 
   useEffect(() => { preview(getEmptyImage(), { captureDraggingState: true }); }, [preview]);
   if (!children) return null;
@@ -200,77 +196,130 @@ function DropTarget({ children, onDrop }) {
   return <div ref={drop} style={{ height: '100%' }}>{children}</div>;
 }
 
-// ═══ 添加任务弹窗 ═══
-function AddTaskModal({ defaultDate, onAdd, onClose }) {
+// ═══ 任务弹窗（新建 + 编辑共用）═══
+function EventModal({ event, defaultDate, onSave, onDelete, onClose }) {
+  const isEdit = !!event;
   const today = new Date();
-  const [title, setTitle] = useState('');
-  const [month, setMonth] = useState(defaultDate ? defaultDate.getMonth() + 1 : today.getMonth() + 1);
-  const [day, setDay]     = useState(defaultDate ? defaultDate.getDate()     : today.getDate());
-  const [hour, setHour]   = useState(9);
-  const [minute, setMin]  = useState(0);
+
+  const getFields = () => {
+    if (event) {
+      return {
+        title: event.title,
+        desc: event.description || '',
+        sM: event.start.getMonth() + 1, sD: event.start.getDate(),
+        sH: event.start.getHours(), sMin: event.start.getMinutes(),
+        eM: event.end.getMonth() + 1, eD: event.end.getDate(),
+        eH: event.end.getHours(), eMin: event.end.getMinutes(),
+      };
+    }
+    return {
+      title: '',
+      desc: '',
+      sM: defaultDate ? defaultDate.getMonth() + 1 : today.getMonth() + 1,
+      sD: defaultDate ? defaultDate.getDate() : today.getDate(),
+      sH: 9, sMin: 0,
+      eM: defaultDate ? defaultDate.getMonth() + 1 : today.getMonth() + 1,
+      eD: defaultDate ? defaultDate.getDate() : today.getDate(),
+      eH: 10, eMin: 0,
+    };
+  };
+
+  const init = getFields();
+  const [title, setTitle] = useState(init.title);
+  const [desc, setDesc] = useState(init.desc);
+  const [sM, setSM] = useState(init.sM); const [sD, setSD] = useState(init.sD);
+  const [sH, setSH] = useState(init.sH); const [sMin, setSMin] = useState(init.sMin);
+  const [eM, setEM] = useState(init.eM); const [eD, setED] = useState(init.eD);
+  const [eH, setEH] = useState(init.eH); const [eMin, setEMin] = useState(init.eMin);
+
+  const year = event ? event.start.getFullYear() : (defaultDate ? defaultDate.getFullYear() : today.getFullYear());
+
+  const buildDates = () => {
+    const start = new Date(year, sM - 1, sD, sH, sMin);
+    const end = new Date(year, eM - 1, eD, eH, eMin);
+    return { start, end };
+  };
 
   const handleSubmit = () => {
-    const y = defaultDate ? defaultDate.getFullYear() : today.getFullYear();
-    const start = new Date(y, month - 1, day, hour, minute);
-    const end = new Date(start.getTime() + 60 * 60 * 1000);
-    if (isNaN(start.getTime())) return;
-    onAdd({ title: title || '新任务', start, end });
+    const { start, end } = buildDates();
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) return;
+    if (end <= start) return;
+    onSave({
+      ...(isEdit ? { id: event.id } : {}),
+      title: title || '新任务',
+      start,
+      end,
+      description: desc,
+    });
+    onClose();
+  };
+
+  const handleDelete = () => {
+    if (isEdit && onDelete) onDelete(event.id);
     onClose();
   };
 
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal event-modal" onClick={e => e.stopPropagation()}>
-        <h3>添加任务</h3>
+        <h3>{isEdit ? '编辑任务' : '添加任务'}</h3>
 
         <label>任务名称</label>
         <input className="modal-input" value={title} onChange={e => setTitle(e.target.value)}
           placeholder="输入任务名称" autoFocus onKeyDown={e => e.key === 'Enter' && handleSubmit()} />
 
-        <label>日期</label>
+        <label>描述</label>
+        <textarea className="modal-input modal-textarea" value={desc} onChange={e => setDesc(e.target.value)}
+          placeholder="可选描述" rows={2} />
+
+        <label>开始时间</label>
         <div className="modal-date-row">
-          <input type="number" className="modal-input modal-num" value={month} onChange={e => setMonth(Number(e.target.value))}
-            min={1} max={12} placeholder="月" />
+          <input type="number" className="modal-input modal-num" value={sM} onChange={e => setSM(Number(e.target.value))} min={1} max={12} />
           <span className="modal-date-label">月</span>
-          <input type="number" className="modal-input modal-num" value={day} onChange={e => setDay(Number(e.target.value))}
-            min={1} max={31} placeholder="日" />
+          <input type="number" className="modal-input modal-num" value={sD} onChange={e => setSD(Number(e.target.value))} min={1} max={31} />
           <span className="modal-date-label">日</span>
+          <input type="number" className="modal-input modal-num" value={sH} onChange={e => setSH(Number(e.target.value))} min={0} max={23} />
+          <span className="modal-date-label">:</span>
+          <input type="number" className="modal-input modal-num" value={sMin} onChange={e => setSMin(Number(e.target.value))} min={0} max={59} />
         </div>
 
-        <label>时间</label>
+        <label>结束时间</label>
         <div className="modal-date-row">
-          <input type="number" className="modal-input modal-num" value={hour} onChange={e => setHour(Number(e.target.value))}
-            min={0} max={23} placeholder="时" />
+          <input type="number" className="modal-input modal-num" value={eM} onChange={e => setEM(Number(e.target.value))} min={1} max={12} />
+          <span className="modal-date-label">月</span>
+          <input type="number" className="modal-input modal-num" value={eD} onChange={e => setED(Number(e.target.value))} min={1} max={31} />
+          <span className="modal-date-label">日</span>
+          <input type="number" className="modal-input modal-num" value={eH} onChange={e => setEH(Number(e.target.value))} min={0} max={23} />
           <span className="modal-date-label">:</span>
-          <input type="number" className="modal-input modal-num" value={minute} onChange={e => setMin(Number(e.target.value))}
-            min={0} max={59} placeholder="分" />
+          <input type="number" className="modal-input modal-num" value={eMin} onChange={e => setEMin(Number(e.target.value))} min={0} max={59} />
         </div>
 
         <div className="modal-buttons">
+          {isEdit && <button className="btn-delete" onClick={handleDelete}>删除</button>}
           <button className="btn-cancel" onClick={onClose}>取消</button>
-          <button className="btn-confirm" onClick={handleSubmit}>添加</button>
+          <button className="btn-confirm" onClick={handleSubmit}>{isEdit ? '保存' : '添加'}</button>
         </div>
       </div>
     </div>
   );
 }
 
-// ── 数据 ──
+// ── 初始数据 ──
 const D = (d, h = 0, m = 0) => new Date(2026, 4, d, h, m);
 const INITIAL_EVENTS = [
-  { id: 1,  title: 'Q2 战略研讨会',     start: D(25, 9, 0),  end: D(27, 18, 0) },
-  { id: 2,  title: '产品 Hackathon',    start: D(26, 8, 0),  end: D(28, 17, 0) },
-  { id: 3,  title: '深度工作',           start: D(25, 9, 0),  end: D(25, 11, 0) },
-  { id: 4,  title: '客户沟通',           start: D(25, 14, 0),  end: D(25, 15, 30) },
-  { id: 5,  title: '周会',              start: D(26, 9, 0),  end: D(26, 10, 0) },
-  { id: 6,  title: '代码评审',           start: D(26, 9, 30), end: D(26, 11, 0) },
-  { id: 7,  title: '用户调研',           start: D(27, 8, 0),  end: D(27, 10, 0) },
-  { id: 8,  title: '竞品分析',           start: D(27, 9, 0),  end: D(27, 11, 0) },
-  { id: 9,  title: '站会',              start: D(27, 10, 0), end: D(27, 10, 30) },
-  { id: 10, title: '技术分享',           start: D(28, 10, 0), end: D(28, 11, 30) },
-  { id: 11, title: '需求梳理',           start: D(28, 14, 0), end: D(28, 16, 0) },
-  { id: 12, title: 'Sprint 规划',      start: D(29, 9, 0),  end: D(29, 11, 0) },
-  { id: 13, title: '回顾会议',           start: D(29, 10, 0), end: D(29, 12, 0) },
+  { id: 1,  title: 'Q2 战略研讨会',     start: D(25, 9, 0),  end: D(27, 18, 0), description: '' },
+  { id: 2,  title: '产品 Hackathon',    start: D(26, 8, 0),  end: D(28, 17, 0), description: '' },
+  { id: 3,  title: '深度工作',           start: D(25, 9, 0),  end: D(25, 11, 0), description: '' },
+  { id: 4,  title: '客户沟通',           start: D(25, 14, 0),  end: D(25, 15, 30), description: '' },
+  { id: 5,  title: '周会',              start: D(26, 9, 0),  end: D(26, 10, 0), description: '' },
+  { id: 6,  title: '代码评审',           start: D(26, 9, 30), end: D(26, 11, 0), description: '' },
+  { id: 7,  title: '用户调研',           start: D(27, 8, 0),  end: D(27, 10, 0), description: '' },
+  { id: 8,  title: '竞品分析',           start: D(27, 9, 0),  end: D(27, 11, 0), description: '' },
+  { id: 9,  title: '站会',              start: D(27, 10, 0), end: D(27, 10, 30), description: '' },
+  { id: 10, title: '技术分享',           start: D(28, 10, 0), end: D(28, 11, 30), description: '' },
+  { id: 11, title: '需求梳理',           start: D(28, 14, 0), end: D(28, 16, 0), description: '' },
+  { id: 12, title: 'Sprint 规划',      start: D(29, 9, 0),  end: D(29, 11, 0), description: '' },
+  { id: 13, title: '回顾会议',           start: D(29, 10, 0), end: D(29, 12, 0), description: '' },
 ];
 
 const MAX_HISTORY = 30;
@@ -279,14 +328,49 @@ export default function App() {
   const [events, setEvents] = useState(INITIAL_EVENTS);
   const [history, setHistory] = useState([INITIAL_EVENTS]);
   const [ghost, setGhost] = useState(null);
-  const [showAddModal, setShowAddModal] = useState(false);
+  const [showEventModal, setShowEventModal] = useState(false);
+  const [editingEvent, setEditingEvent] = useState(null); // null=新建, 非null=编辑
   const nextIdRef = useRef(14);
 
-  // 幽灵事件合并
-  const displayEvents = ghost
-    ? [...events.filter(e => e.id !== ghost.id), ghost]
-    : events;
+  // ── 启动时从 API 加载数据 ──
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const data = await fetchTasks();
+        if (!cancelled && data && data.length > 0) {
+          const mapped = data.map(e => ({
+            ...e,
+            start: new Date(e.start),
+            end: new Date(e.end),
+            description: e.description || '',
+          }));
+          setEvents(mapped);
+          setHistory([mapped]);
+          nextIdRef.current = Math.max(...mapped.map(e => e.id), 0) + 1;
+        }
+      } catch {
+        // API 不可用 → 使用本地初始数据
+      }
+    }
+    load();
+    return () => { cancelled = true; };
+  }, []);
 
+  // ── 重叠等级缓存 + 展示事件列表 ──
+  // 合并为一个 useMemo，避免级联重渲染
+  const { displayEvents, overlapMap } = useMemo(() => {
+    const display = ghost
+      ? [...events.filter(e => e.id !== ghost.id), ghost]
+      : events;
+    const map = new Map();
+    for (const ev of display) {
+      map.set(ev.id, calcOverlap(events, ev.start, ev.end, ev.id));
+    }
+    return { displayEvents: display, overlapMap: map };
+  }, [events, ghost]);
+
+  // ── 撤销 ──
   const undo = useCallback(() => {
     setHistory(prev => {
       if (prev.length <= 1) return prev;
@@ -310,19 +394,40 @@ export default function App() {
     setHistory(prev => [...prev.slice(-(MAX_HISTORY - 1)), n]);
   }, []);
 
-  const applyMove = useCallback((ev, start, end) => {
+  // ── 内部状态更新 + 历史 ──
+  const applyEvents = useCallback((next, opts = {}) => {
+    setEvents(next);
+    if (!opts.skipHistory) pushHistory(next);
+  }, [pushHistory]);
+
+  // ── CRUD 操作（乐观更新 + API 持久化）──
+
+  const addEvent = useCallback((data) => {
+    const newEvent = { ...data, id: nextIdRef.current++, description: data.description || '' };
+    setEvents(prev => { const next = [...prev, newEvent]; pushHistory(next); return next; });
+    // 异步持久化
+    createTask(newEvent).catch(() => {});
+  }, [pushHistory]);
+
+  const editEvent = useCallback((id, data) => {
     setEvents(prev => {
-      const next = prev.map(e => e.id === ev.id ? { ...e, start, end } : e);
+      const next = prev.map(e => e.id === id ? { ...e, ...data } : e);
       pushHistory(next);
       return next;
     });
+    updateTask(id, data).catch(() => {});
   }, [pushHistory]);
 
-  const addEvent = useCallback((data) => {
-    const newEvent = { ...data, id: nextIdRef.current++ };
-    setEvents(prev => { const next = [...prev, newEvent]; pushHistory(next); return next; });
+  const removeEvent = useCallback((id) => {
+    setEvents(prev => {
+      const next = prev.filter(e => e.id !== id);
+      pushHistory(next);
+      return next;
+    });
+    deleteTask(id).catch(() => {});
   }, [pushHistory]);
 
+  // ── 拖拽松手 ──
   const handleDrop = useCallback((item, x, y) => {
     setGhost(null);
     const targetDate = getDateFromPoint(x, y);
@@ -332,29 +437,95 @@ export default function App() {
     if (item.mode === 'resizeLeft') {
       const ns = moment(targetDate).hour(ev.start.getHours()).minute(ev.start.getMinutes()).second(0).toDate();
       if (ns >= new Date(ev.end)) return;
-      applyMove(ev, ns, new Date(ev.end));
+      setEvents(prev => {
+        const next = prev.map(e => e.id === ev.id ? { ...e, start: ns } : e);
+        pushHistory(next);
+        return next;
+      });
+      debouncedUpdateTime(ev.id, ns, ev.end);
     } else if (item.mode === 'resizeRight') {
       const ne = moment(targetDate).add(1, 'day').hour(ev.end.getHours()).minute(ev.end.getMinutes()).second(0).toDate();
       if (ne <= new Date(ev.start)) return;
-      applyMove(ev, new Date(ev.start), ne);
+      setEvents(prev => {
+        const next = prev.map(e => e.id === ev.id ? { ...e, end: ne } : e);
+        pushHistory(next);
+        return next;
+      });
+      debouncedUpdateTime(ev.id, ev.start, ne);
     } else {
+      // 移动
       const dur = new Date(ev.end).getTime() - new Date(ev.start).getTime();
       const ns = moment(targetDate).hour(ev.start.getHours()).minute(ev.start.getMinutes()).second(0).toDate();
       const ne = new Date(ns.getTime() + dur);
-      applyMove(ev, ns, ne);
+      setEvents(prev => {
+        const next = prev.map(e => e.id === ev.id ? { ...e, start: ns, end: ne } : e);
+        pushHistory(next);
+        return next;
+      });
+      debouncedUpdateTime(ev.id, ns, ne);
     }
-  }, [applyMove]);
+  }, [pushHistory]);
 
   const handleGhost = useCallback((g) => setGhost(g), []);
+
+  // ── 右键事件 → 删除 ──
+  const handleDelete = useCallback((event) => {
+    removeEvent(event.id);
+  }, [removeEvent]);
+
+  // ── 双击事件 → 编辑弹窗 ──
+  const handleDoubleClick = useCallback((event) => {
+    if (event.__ghost) return; // 忽略幽灵事件
+    setEditingEvent(event);
+    setShowEventModal(true);
+  }, []);
+
+  // ── 弹窗保存 ──
+  const handleModalSave = useCallback((data) => {
+    if (data.id) {
+      editEvent(data.id, data);
+    } else {
+      addEvent(data);
+    }
+  }, [addEvent, editEvent]);
+
+  const handleModalDelete = useCallback((id) => {
+    removeEvent(id);
+  }, [removeEvent]);
 
   // ── 左键空白区：单击创建 / 拖拽跨天（带幽灵预览）──
   const lcRef = useRef({ active: false, startDate: null });
   const [lcGhost, setLcGhost] = useState(null);
 
+  // 全局 mouseup 清理：防止鼠标在窗口外释放导致幽灵残留
+  useEffect(() => {
+    const onWindowUp = () => {
+      if (lcRef.current.active) {
+        lcRef.current.active = false;
+        setLcGhost(null);
+      }
+    };
+    window.addEventListener('mouseup', onWindowUp);
+    return () => window.removeEventListener('mouseup', onWindowUp);
+  }, []);
+
+  // 追踪 RBC "+N more" 弹窗状态
+  const overlayOpenRef = useRef(false);
+  useEffect(() => {
+    const check = () => {
+      overlayOpenRef.current = !!document.querySelector('.rbc-overlay');
+    };
+    const interval = setInterval(check, 200);
+    // 也用 MutationObserver 监听 overlay 的增删
+    const obs = new MutationObserver(() => check());
+    obs.observe(document.body, { childList: true, subtree: true });
+    return () => { clearInterval(interval); obs.disconnect(); };
+  }, []);
+
   const handleLcMouseDown = useCallback((e) => {
-    if (e.button !== 0) return; // 只处理左键
-    // 如果点在事件上 → 交给 DragEventWrapper 的 drag
-    if (e.target.closest('.rbc-event')) return;
+    if (e.button !== 0) return;
+    if (e.target.closest('.rbc-event, .rbc-show-more, .rbc-overlay')) return;
+    if (overlayOpenRef.current || document.querySelector('.rbc-overlay')) return;
     const d = getDateFromPoint(e.clientX, e.clientY);
     if (!d) return;
     lcRef.current = { active: true, startDate: d, moved: false };
@@ -364,6 +535,9 @@ export default function App() {
 
   const handleLcMouseMove = useCallback((e) => {
     if (!lcRef.current.active) return;
+    if (overlayOpenRef.current || document.querySelector('.rbc-overlay')) {
+      lcRef.current.active = false; setLcGhost(null); return;
+    }
     const d = getDateFromPoint(e.clientX, e.clientY);
     if (!d) return;
     lcRef.current.moved = true;
@@ -381,14 +555,12 @@ export default function App() {
     if (!d) return;
     const start = lcRef.current.startDate;
     if (lcRef.current.moved) {
-      // 拖拽 → 跨天任务 9:00-18:00
       const s = new Date(Math.min(start.getTime(), d.getTime()));
       const eNd = new Date(Math.max(start.getTime(), d.getTime()) + 24 * 60 * 60 * 1000);
       s.setHours(9, 0, 0, 0);
       eNd.setHours(18, 0, 0, 0);
       addEvent({ title: '新任务', start: s, end: eNd });
     } else {
-      // 单击 → 1 小时任务 9:00-10:00
       const s = new Date(start);
       s.setHours(9, 0, 0, 0);
       const eNd = new Date(s.getTime() + 60 * 60 * 1000);
@@ -396,38 +568,63 @@ export default function App() {
     }
   }, [addEvent]);
 
-  // 合并左键幽灵到显示列表
-  const allDisplayEvents = lcGhost
-    ? [...displayEvents.filter(e => e.id !== -1), lcGhost]
-    : displayEvents;
+  // 合并所有展示事件（含左键幽灵）
+  const allDisplayEvents = useMemo(() => {
+    if (lcGhost) {
+      return [...displayEvents.filter(e => e.id !== -1), lcGhost];
+    }
+    return displayEvents;
+  }, [displayEvents, lcGhost]);
 
-  // ── 右键事件 → 删除 ──
-  const handleDelete = useCallback((event) => {
-    setEvents(prev => {
-      const next = prev.filter(e => e.id !== event.id);
-      pushHistory(next);
-      return next;
-    });
-  }, [pushHistory]);
+  // 为左键幽灵也计算重叠等级供着色用
+  const lcGhostOverlap = useMemo(() => {
+    if (!lcGhost) return null;
+    return calcOverlap(events, lcGhost.start, lcGhost.end, lcGhost.id);
+  }, [events, lcGhost]);
 
+  // ── 事件着色 ──
   const eventPropGetter = useCallback((event) => {
     if (event.__ghost) {
+      // 幽灵事件：半透明渐变色 + 实色边框
+      const lv = event.id === -1 ? (lcGhostOverlap || 1) : (overlapMap.get(event.id) || 1);
+      const c = colorForOverlap(lv);
       return {
         style: {
-          backgroundColor: 'rgba(92, 107, 192, 0.35)',
-          color: '#1a1a2e',
-          border: '2px solid #5C6BC0',
-          borderRadius: '3px',
+          backgroundColor: `hsla(${c.h},${c.s}%,${c.l}%,0.35)`,
+          color: c.text,
+          border: `2px solid ${c.bg}`,
+          borderRadius: '5px',
           opacity: 1,
           fontWeight: 600,
         },
         className: 'rbc-event-ghost',
       };
     }
-    const lv = calcOverlap(events, event.start, event.end, event.id);
-    const c = COLORS[Math.min(lv, 3)];
-    return { style: { backgroundColor: c.bg, color: c.text, border: 'none', borderRadius: '3px', opacity: 0.92 } };
-  }, [events]);
+    // 真实事件：微渐变背景
+    const lv = overlapMap.get(event.id) || 1;
+    const c = colorForOverlap(lv);
+    return {
+      style: {
+        background: eventGradient(c),
+        color: c.text,
+        border: 'none',
+        borderRadius: '5px',
+        opacity: 0.92,
+      },
+    };
+  }, [overlapMap, lcGhostOverlap]);
+
+  // ── 图例渐变条 ──
+  const legendGradient = (() => {
+    const stops = [1, 2, 3, 5, 8];
+    const colors = stops.map(n => colorForOverlap(n).bg);
+    return `linear-gradient(90deg, ${colors.join(', ')})`;
+  })();
+
+  const eventWrapperComp = (props) => {
+    const lv = (props.event && overlapMap.get(props.event.id)) || 1;
+    return <DragEventWrapper {...props} onDelete={handleDelete} overlapLevel={lv} />;
+  };
 
   return (
     <DndProvider backend={HTML5Backend}>
@@ -441,14 +638,16 @@ export default function App() {
         <div className="header">
           <h2>⚡ 精力感知日历</h2>
           <div className="header-btns">
-            <button className="add-btn" onClick={() => setShowAddModal(true)}>＋ 添加任务</button>
+            <button className="add-btn" onClick={() => { setEditingEvent(null); setShowEventModal(true); }}>＋ 添加任务</button>
             <button className="undo-btn" onClick={undo} disabled={history.length <= 1}>↩ 撤销</button>
           </div>
         </div>
         <div className="legend">
-          <span className="legend-item"><span className="dot" style={{ background: '#4CAF50' }} /> 低压力</span>
-          <span className="legend-item"><span className="dot" style={{ background: '#FFC107' }} /> 中压力</span>
-          <span className="legend-item"><span className="dot" style={{ background: '#F44336' }} /> 高压力</span>
+          <span className="legend-item">
+            <span className="legend-label-left">低压力</span>
+            <span className="legend-gradient" style={{ background: legendGradient }} />
+            <span className="legend-label-right">高压力</span>
+          </span>
         </div>
         <div className="calendar-wrapper">
           <DropTarget onDrop={handleDrop}>
@@ -458,18 +657,21 @@ export default function App() {
               defaultView="month"
               defaultDate={new Date(2026, 4, 25)}
               eventPropGetter={eventPropGetter}
-              components={{ eventWrapper: (props) => <DragEventWrapper {...props} onDelete={handleDelete} /> }}
+              components={{ eventWrapper: eventWrapperComp }}
+              onDoubleClickEvent={handleDoubleClick}
               popup
               views={['month', 'week', 'day']}
             />
           </DropTarget>
         </div>
 
-        {showAddModal && (
-          <AddTaskModal
+        {showEventModal && (
+          <EventModal
+            event={editingEvent}
             defaultDate={new Date(2026, 4, 25)}
-            onAdd={addEvent}
-            onClose={() => setShowAddModal(false)}
+            onSave={handleModalSave}
+            onDelete={handleModalDelete}
+            onClose={() => { setShowEventModal(false); setEditingEvent(null); }}
           />
         )}
       </div>
